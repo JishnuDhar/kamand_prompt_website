@@ -1,16 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import './App.css';
 
-// Automatically use localhost when developing, and your Render backend when live on Netlify
 const BACKEND_URL = window.location.hostname === 'localhost' 
   ? 'http://localhost:5000' 
   : 'https://kamand-prompt-chatbot-backend.onrender.com';
 
-// Dedicated URL for the standalone Gemini LLM Chat application
 const LLM_APP_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:5174'
-  : 'https://your-llm-chat-app.netlify.app'; // Update when deploying live
+  : 'https://your-llm-chat-app.netlify.app';
 
 const socket = io(BACKEND_URL);
 
@@ -23,15 +21,27 @@ function App() {
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Chat, Search & Conversations States
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [conversations, setConversations] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
   const [message, setMessage] = useState('');
   const [chatLog, setChatLog] = useState([]);
+  
+  // Image handling state & refs
+  const [imagePreview, setImagePreview] = useState(null);
+  const fileInputRef = useRef(null);
 
-  // Fetch recent conversations on login
+  // Voice recording state & refs
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioPreview, setAudioPreview] = useState(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
+  // Mobile drawer state
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [activeMenuIndex, setActiveMenuIndex] = useState(null);
+
   useEffect(() => {
     if (userId) {
       fetch(`${BACKEND_URL}/api/users/conversations/${userId}`)
@@ -43,7 +53,6 @@ function App() {
     }
   }, [userId]);
 
-  // Register socket connection and handle incoming messages
   useEffect(() => {
     if (userId) {
       socket.emit('register_user', userId);
@@ -74,7 +83,6 @@ function App() {
     }
   }, [userId, selectedUser]);
 
-  // Fetch message history when selected user changes
   useEffect(() => {
     if (selectedUser && userId) {
       fetch(`${BACKEND_URL}/api/users/history/${userId}/${selectedUser._id}`)
@@ -86,7 +94,6 @@ function App() {
     }
   }, [selectedUser, userId]);
 
-  // Handle User Search
   const handleSearch = async (e) => {
     const query = e.target.value;
     setSearchQuery(query);
@@ -106,7 +113,6 @@ function App() {
     }
   };
 
-  // Handle Authentication Form Submission
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -121,6 +127,11 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("Server returned HTML instead of JSON. Check if your backend server is running on port 5000.");
+      }
 
       const data = await response.json();
 
@@ -145,25 +156,73 @@ function App() {
     }
   };
 
-  // Send Private Message
+  const handleImageSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setAudioPreview(reader.result);
+        };
+        reader.readAsDataURL(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Microphone error:', err);
+      alert('Could not access microphone.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
   const sendMessage = (e) => {
     e.preventDefault();
-    if (message.trim() !== '' && selectedUser) {
+    if ((message.trim() !== '' || imagePreview || audioPreview) && selectedUser) {
       const messageData = {
         senderId: userId,
         recipientId: selectedUser._id,
         message: message,
+        imageUrl: imagePreview || '',
+        audioUrl: audioPreview || ''
       };
 
       socket.emit('send_private_message', messageData);
 
-      // Instant conversation list preview update
       setConversations((prevConvos) => {
         const existingIndex = prevConvos.findIndex(c => c._id === selectedUser._id);
         const updatedConvo = {
           _id: selectedUser._id,
           username: selectedUser.username,
-          lastMessage: message,
+          lastMessage: message || (audioPreview ? '[Voice Note]' : '[Image attachment]'),
           createdAt: new Date().toISOString()
         };
 
@@ -177,65 +236,58 @@ function App() {
       });
 
       setMessage('');
+      setImagePreview(null);
+      setAudioPreview(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   if (token) {
     return (
-      <div style={{ display: 'flex', height: '100vh', fontFamily: 'Arial', background: '#f4f4f9' }}>
-        {/* Sidebar */}
-        <div style={{ width: '320px', background: 'white', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '15px', background: '#007bff', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0 }}>Chats</h3>
+      <div className="chat-layout" onClick={() => setActiveMenuIndex(null)}>
+        {isSidebarOpen && (
+          <div className="sidebar-overlay" onClick={() => setIsSidebarOpen(false)} />
+        )}
+
+        <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`} onClick={(e) => e.stopPropagation()}>
+          <header className="sidebar-header">
+            <h3>Chats</h3>
             
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              {/* Button to Switch to Gemini LLM Chat App with active userId in URL */}
+            <div className="header-actions">
               <a
                 href={`${LLM_APP_URL}?userId=${userId}`}
-                style={{
-                  padding: '5px 10px',
-                  background: '#17a2b8',
-                  color: 'white',
-                  textDecoration: 'none',
-                  borderRadius: '4px',
-                  fontSize: '11px',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px'
-                }}
+                className="ai-chat-btn"
                 title="Switch to Gemini AI Assistant"
               >
-                ✨ AI Chat
+                AI Chat
               </a>
 
-              {/* Logout Button */}
               <button 
                 onClick={() => {
                   localStorage.clear();
                   setToken('');
                   setUserId('');
                 }}
-                style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                className="logout-btn"
               >
                 Logout
               </button>
             </div>
-          </div>
+          </header>
 
-          <div style={{ padding: '10px', background: '#f8f9fa', borderBottom: '1px solid #eee' }}>
+          <div className="search-box">
             <input 
               type="text" 
-              placeholder="Search new username..." 
+              placeholder="Search username..." 
               value={searchQuery}
               onChange={handleSearch}
-              style={{ width: '100%', padding: '8px', boxSizing: 'border-box', borderRadius: '4px', border: '1px solid #ccc' }}
+              className="chat-input-field"
             />
           </div>
 
           {searchQuery && (
-            <div style={{ background: '#fff', borderBottom: '1px solid #ddd', maxHeight: '150px', overflowY: 'auto' }}>
-              <div style={{ padding: '6px 10px', fontSize: '11px', color: '#888', background: '#f1f1f1' }}>Search Results</div>
+            <div className="search-results">
+              <div className="section-label">Search Results</div>
               {Array.isArray(searchResults) && searchResults.map((user) => (
                 <div 
                   key={user._id} 
@@ -243,11 +295,12 @@ function App() {
                     setSelectedUser(user);
                     setSearchQuery('');
                     setSearchResults([]);
+                    setIsSidebarOpen(false);
                     if (!conversations.some(c => c._id === user._id)) {
                       setConversations([{ _id: user._id, username: user.username, lastMessage: '' }, ...conversations]);
                     }
                   }}
-                  style={{ padding: '10px 15px', borderBottom: '1px solid #f4f4f9', cursor: 'pointer', background: '#fff' }}
+                  className="user-item"
                 >
                   <strong>{user.username}</strong>
                 </div>
@@ -255,140 +308,254 @@ function App() {
             </div>
           )}
 
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            <div style={{ padding: '8px 15px', fontSize: '11px', color: '#888', background: '#f8f9fa' }}>Recent Conversations</div>
+          <div className="conversations-list">
+            <div className="section-label">Recent Conversations</div>
             {Array.isArray(conversations) && conversations.map((convo) => (
               <div 
                 key={convo._id} 
-                onClick={() => setSelectedUser(convo)}
-                style={{ 
-                  padding: '12px 15px', 
-                  borderBottom: '1px solid #eee', 
-                  cursor: 'pointer', 
-                  background: selectedUser?._id === convo._id ? '#e9ecef' : 'white' 
+                onClick={() => {
+                  setSelectedUser(convo);
+                  setIsSidebarOpen(false);
                 }}
+                className={`convo-item ${selectedUser?._id === convo._id ? 'active' : ''}`}
               >
-                <div style={{ fontWeight: 'bold', fontSize: '14px', marginBottom: '3px' }}>{convo.username}</div>
-                <div style={{ fontSize: '12px', color: '#666', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div className="convo-username">{convo.username}</div>
+                <div className="convo-last-msg">
                   {convo.lastMessage || 'Click to start chatting'}
                 </div>
               </div>
             ))}
             {(!Array.isArray(conversations) || conversations.length === 0) && !searchQuery && (
-              <p style={{ textAlign: 'center', color: '#888', fontSize: '13px', marginTop: '30px' }}>No chats yet. Search a username above!</p>
+              <p className="empty-state-text">No chats yet. Search a username above!</p>
             )}
           </div>
 
-          <div style={{ padding: '10px', fontSize: '12px', color: '#666', borderTop: '1px solid #ddd', textAlign: 'center' }}>
+          <footer className="user-footer">
             Logged in as: <strong>{username}</strong>
-          </div>
-        </div>
+          </footer>
+        </aside>
 
-        {/* Main Chat Area */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#fff' }}>
+        <main className="main-chat-area">
           {selectedUser ? (
             <>
-              <div style={{ padding: '15px 20px', background: '#f8f9fa', borderBottom: '1px solid #ddd' }}>
-                <h3 style={{ margin: 0 }}>{selectedUser.username}</h3>
-              </div>
+              <header className="chat-header">
+                <button 
+                  className="hamburger-btn" 
+                  onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                  aria-label="Toggle Menu"
+                >
+                  ☰
+                </button>
+                <h3>{selectedUser.username}</h3>
+              </header>
 
-              <div style={{ flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', background: '#f4f4f9' }}>
+              <div className="chat-messages">
                 {Array.isArray(chatLog) && chatLog.map((chat, index) => {
                   const isMe = String(chat.sender) === String(userId);
+                  const isHatBc = chat.message && chat.message.trim().toLowerCase() === 'hat bc';
+                  const hasText = chat.message && chat.message.trim().length > 0;
+                  
                   return (
                     <div 
                       key={index} 
-                      style={{ 
-                        background: isMe ? '#dcf8c6' : 'white', 
-                        padding: '10px 15px', 
-                        borderRadius: '8px', 
-                        maxWidth: '60%', 
-                        alignSelf: isMe ? 'flex-end' : 'flex-start',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-                      }}
+                      className={`message-bubble-wrapper ${isMe ? 'outgoing-wrapper' : 'incoming-wrapper'}`}
                     >
-                      <div style={{ fontSize: '14px', color: '#333', wordBreak: 'break-word' }}>{chat.message}</div>
-                      <div style={{ fontSize: '10px', color: '#888', textAlign: 'right', marginTop: '3px' }}>
-                        {new Date(chat.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {!isMe && hasText && (
+                        <div className="external-menu-wrapper">
+                          <button 
+                            className="options-dots-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuIndex(activeMenuIndex === index ? null : index);
+                            }}
+                            title="Options"
+                          >
+                            ⋮
+                          </button>
+
+                          {activeMenuIndex === index && (
+                            <div className="message-dropdown-menu">
+                              <button 
+                                onClick={() => {
+                                  navigator.clipboard.writeText(chat.message);
+                                  setActiveMenuIndex(null);
+                                }}
+                              >
+                                📋 Copy Text
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className={`message-bubble ${isMe ? 'outgoing' : 'incoming'} ${isHatBc ? 'orange-bubble' : ''}`}>
+                        {chat.imageUrl && (
+                          <img src={chat.imageUrl} alt="attachment" className="chat-image-attachment" />
+                        )}
+                        {chat.audioUrl && (
+                          <audio controls src={chat.audioUrl} className="chat-audio-attachment" />
+                        )}
+                        {chat.message && (
+                          <div className="message-content">
+                            {chat.message}
+                          </div>
+                        )}
+                        <div className="message-time">
+                          {new Date(chat.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </div>
                       </div>
                     </div>
                   );
                 })}
               </div>
 
-              <form onSubmit={sendMessage} style={{ display: 'flex', padding: '15px', background: 'white', borderTop: '1px solid #ddd' }}>
+              {imagePreview && (
+                <div className="image-preview-container">
+                  <img src={imagePreview} alt="Upload preview" className="preview-thumbnail" />
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      setImagePreview(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }} 
+                    className="remove-preview-btn"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {audioPreview && (
+                <div className="image-preview-container">
+                  <audio controls src={audioPreview} className="preview-audio" />
+                  <button 
+                    type="button" 
+                    onClick={() => setAudioPreview(null)} 
+                    className="remove-preview-btn"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              <form onSubmit={sendMessage} className="chat-input-container">
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  ref={fileInputRef} 
+                  onChange={handleImageSelect} 
+                  style={{ display: 'none' }} 
+                />
+                <button 
+                  type="button" 
+                  onClick={() => fileInputRef.current?.click()} 
+                  className="attach-btn"
+                  title="Attach Photo"
+                >
+                  📷
+                </button>
+
+                {!isRecording ? (
+                  <button 
+                    type="button" 
+                    onClick={startRecording} 
+                    className="attach-btn"
+                    title="Record Voice Note"
+                  >
+                    🎙️
+                  </button>
+                ) : (
+                  <button 
+                    type="button" 
+                    onClick={stopRecording} 
+                    className="attach-btn recording-active"
+                    title="Stop Recording"
+                  >
+                    ⏹️ Recording...
+                  </button>
+                )}
+
                 <input 
                   type="text" 
                   value={message} 
                   onChange={(e) => setMessage(e.target.value)} 
                   placeholder={`Message ${selectedUser.username}...`} 
-                  style={{ flex: 1, padding: '10px', borderRadius: '4px', border: '1px solid #ccc', marginRight: '10px', outline: 'none' }}
+                  className="chat-input-field"
                 />
                 <button 
                   type="submit" 
-                  style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}
+                  className="primary-btn"
                 >
                   Send
                 </button>
               </form>
             </>
           ) : (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#888' }}>
+            <div className="no-chat-selected">
+              <button 
+                className="hamburger-btn mobile-only-hamburger" 
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              >
+                ☰ Open Chats
+              </button>
               <h3>Select a chat from the sidebar or search a user</h3>
             </div>
           )}
-        </div>
+        </main>
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', fontFamily: 'Arial', background: '#f4f4f9' }}>
-      <form onSubmit={handleAuthSubmit} style={{ background: 'white', padding: '30px', borderRadius: '8px', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', width: '300px' }}>
-        <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>{isLogin ? 'Login' : 'Sign Up'}</h2>
+    <div className="auth-wrapper">
+      <div className="auth-container">
+        <h1 className="app-title">RIZZAI</h1>
 
-        {error && <p style={{ color: 'red', fontSize: '14px', textAlign: 'center' }}>{error}</p>}
-        {successMessage && <p style={{ color: 'green', fontSize: '14px', textAlign: 'center' }}>{successMessage}</p>}
+        <form onSubmit={handleAuthSubmit} className="auth-card">
+          <h2>{isLogin ? 'Login' : 'Sign Up'}</h2>
 
-        <div style={{ marginBottom: '15px' }}>
-          <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>Username</label>
-          <input 
-            type="text" 
-            value={username} 
-            onChange={(e) => setUsername(e.target.value)} 
-            required 
-            style={{ width: '100%', padding: '8px', boxSizing: 'border-box', borderRadius: '4px', border: '1px solid #ccc' }}
-          />
-        </div>
+          {error && <p className="status-msg error">{error}</p>}
+          {successMessage && <p className="status-msg success">{successMessage}</p>}
 
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>Password</label>
-          <input 
-            type="password" 
-            value={password} 
-            onChange={(e) => setPassword(e.target.value)} 
-            required 
-            style={{ width: '100%', padding: '8px', boxSizing: 'border-box', borderRadius: '4px', border: '1px solid #ccc' }}
-          />
-        </div>
+          <div className="form-group">
+            <label>Username</label>
+            <input 
+              type="text" 
+              value={username} 
+              onChange={(e) => setUsername(e.target.value)} 
+              required 
+              className="chat-input-field"
+            />
+          </div>
 
-        <button 
-          type="submit" 
-          style={{ width: '100%', padding: '10px', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}
-        >
-          {isLogin ? 'Login' : 'Sign Up'}
-        </button>
+          <div className="form-group">
+            <label>Password</label>
+            <input 
+              type="password" 
+              value={password} 
+              onChange={(e) => setPassword(e.target.value)} 
+              required 
+              className="chat-input-field"
+            />
+          </div>
 
-        <p style={{ textAlign: 'center', marginTop: '15px', fontSize: '13px' }}>
-          {isLogin ? "Don't have an account? " : "Already have an account? "}
-          <span 
-            onClick={() => { setIsLogin(!isLogin); setError(''); setSuccessMessage(''); }} 
-            style={{ color: '#007bff', cursor: 'pointer', fontWeight: 'bold' }}
+          <button 
+            type="submit" 
+            className="primary-btn full-width"
           >
-            {isLogin ? 'Sign Up' : 'Login'}
-          </span>
-        </p>
-      </form>
+            {isLogin ? 'Login' : 'Sign Up'}
+          </button>
+
+          <p className="auth-toggle">
+            {isLogin ? "Don't have an account? " : "Already have an account? "}
+            <span 
+              onClick={() => { setIsLogin(!isLogin); setError(''); setSuccessMessage(''); }} 
+            >
+              {isLogin ? 'Sign Up' : 'Login'}
+            </span>
+          </p>
+        </form>
+      </div>
     </div>
   );
 }

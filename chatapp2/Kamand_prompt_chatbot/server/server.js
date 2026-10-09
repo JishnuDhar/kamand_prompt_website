@@ -11,7 +11,7 @@ const Message = require('./models/Message');
 const app = express();
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '15mb' })); // Increased limit to support base64 audio and image payloads
 app.use(cors());
 
 // MongoDB Connection
@@ -23,7 +23,7 @@ mongoose.connect(MONGO_URI, { autoSelectFamily: false })
 
 // Mount Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes); // <-- Mounted here!
+app.use('/api/users', userRoutes);
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -46,10 +46,16 @@ io.on('connection', (socket) => {
   // Handle sending private messages
   socket.on('send_private_message', async (data) => {
     try {
-      const { senderId, recipientId, message } = data;
+      const { senderId, recipientId, message, imageUrl, audioUrl } = data;
       
-      // Save message to MongoDB
-      const newMessage = new Message({ sender: senderId, recipient: recipientId, message });
+      // Save message, image, and voice note payload to MongoDB
+      const newMessage = new Message({ 
+        sender: senderId, 
+        recipient: recipientId, 
+        message: message || '', 
+        imageUrl: imageUrl || '',
+        audioUrl: audioUrl || '' 
+      });
       await newMessage.save();
 
       // Send to recipient if online
