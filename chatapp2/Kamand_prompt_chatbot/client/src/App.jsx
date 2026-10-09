@@ -727,7 +727,7 @@ function App() {
   return (
     <div className="auth-wrapper">
       <div className="auth-container">
-        <h1 className="app-title">RIZZAI</h1>
+        <h1 className="app-title">RAGEB8</h1>
 
         <form onSubmit={handleAuthSubmit} className="auth-card">
           <h2>{isLogin ? 'Login' : 'Sign Up'}</h2>
