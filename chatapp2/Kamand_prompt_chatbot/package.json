@@ -1,0 +1,11 @@
+{
+  "name": "kamand_prompt_chatbot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\" \"npm run dev --prefix ../llm_chat/server\" \"npm run dev --prefix ../llm_chat/client\""
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}
