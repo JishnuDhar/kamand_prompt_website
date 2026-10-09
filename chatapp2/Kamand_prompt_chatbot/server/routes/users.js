@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const Message = require('../models/Message');
+const Group = require('../models/Group');
 
 // Search users by username
 router.get('/search', async (req, res) => {
@@ -20,17 +21,28 @@ router.get('/search', async (req, res) => {
   }
 });
 
-// Get recent chat conversations for a user
+// Get recent chat conversations and groups for a user
 router.get('/conversations/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // 1. Fetch groups where user is a member
+    const groups = await Group.find({ members: userId }).sort({ createdAt: -1 });
+    const formattedGroups = groups.map(g => ({
+      _id: g._id,
+      name: g.name,
+      isGroup: true,
+      lastMessage: 'Group created',
+      createdAt: g.createdAt
+    }));
+
+    // 2. Fetch direct message conversations
     const messages = await Message.find({
       $or: [{ sender: userId }, { recipient: userId }]
     }).populate('sender recipient', 'username');
 
     const contactMap = new Map();
     messages.forEach(msg => {
-      // Handle edge cases if populated fields are null
       if (!msg.sender || !msg.recipient) return;
       
       const isSender = msg.sender._id.toString() === userId;
@@ -39,12 +51,15 @@ router.get('/conversations/:userId', async (req, res) => {
       contactMap.set(otherUser._id.toString(), {
         _id: otherUser._id,
         username: otherUser.username,
-        lastMessage: msg.message,
+        isGroup: false,
+        lastMessage: msg.message || (msg.imageUrl ? '[Image]' : '[Voice Note]'),
         createdAt: msg.createdAt
       });
     });
 
-    res.json(Array.from(contactMap.values()));
+    // Combine groups and private DMs together
+    const combinedConversations = [...formattedGroups, ...Array.from(contactMap.values())];
+    res.json(combinedConversations);
   } catch (err) {
     console.error('Conversations Error:', err);
     res.status(500).json({ error: 'Server error fetching conversations' });
