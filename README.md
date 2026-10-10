@@ -1,4 +1,4 @@
-# RAGEB8 COMMUNICAION WEBPAGE!
+# RAGEB8 COMMUNICATION WEBPAGE!
 -Utkarsh, Kamand Prompt Communication Webpage
 
 This application was made using the MERN stack (MongoDB, Express, React, Node.js), Socket.io for live communication, and Vite + Tailwind CSS for a responsive dark themed interface.
